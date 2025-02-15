@@ -1,0 +1,446 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>初识逆向技术--线程注入 | HD-Blog</title><meta name="author" content="HD"><meta name="copyright" content="HD"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="逆向之远程线程注入   Method     CreateRemoteThread() Windows中的函数，用于在其他进程中创建一个新的线程，让该线程在其他进程中运行。   NtCreateThreadEx() 使用系统调用在目标进程直接创建线程，提供更高级的线程创建功能   QueueUserAPC() 向目标进程内核对象队列中加入需要运行的用户空间异步过程调用（APC),被线程从APC队列">
+<meta property="og:type" content="article">
+<meta property="og:title" content="初识逆向技术--线程注入">
+<meta property="og:url" content="https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/index.html">
+<meta property="og:site_name" content="HD-Blog">
+<meta property="og:description" content="逆向之远程线程注入   Method     CreateRemoteThread() Windows中的函数，用于在其他进程中创建一个新的线程，让该线程在其他进程中运行。   NtCreateThreadEx() 使用系统调用在目标进程直接创建线程，提供更高级的线程创建功能   QueueUserAPC() 向目标进程内核对象队列中加入需要运行的用户空间异步过程调用（APC),被线程从APC队列">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png">
+<meta property="article:published_time" content="2023-08-23T11:46:39.000Z">
+<meta property="article:modified_time" content="2025-01-29T11:03:32.450Z">
+<meta property="article:author" content="HD">
+<meta property="article:tag" content="逆向">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "初识逆向技术--线程注入",
+  "url": "https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/",
+  "image": "https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png",
+  "datePublished": "2023-08-23T11:46:39.000Z",
+  "dateModified": "2025-01-29T11:03:32.450Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "HD",
+      "url": "https://huadongblog.top/"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '初识逆向技术--线程注入',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/3B8E772D51765C282A3959BF9EFBED3D.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">2</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">2</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">2</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> Archives</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">HD-Blog</span></a><a class="nav-page-title" href="/"><span class="site-name">初识逆向技术--线程注入</span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> Archives</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">初识逆向技术--线程注入</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2023-08-23T11:46:39.000Z" title="发表于 2023-08-23 19:46:39">2023-08-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-01-29T11:03:32.450Z" title="更新于 2025-01-29 19:03:32">2025-01-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E9%80%86%E5%90%91/">逆向</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1 id="逆向之远程线程注入"><a href="#逆向之远程线程注入" class="headerlink" title="逆向之远程线程注入"></a>逆向之远程线程注入</h1><table>
+<thead>
+<tr>
+<th>Method</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CreateRemoteThread()</td>
+<td>Windows中的函数，用于在其他进程中创建一个新的线程，让该线程在其他进程中运行。</td>
+</tr>
+<tr>
+<td>NtCreateThreadEx()</td>
+<td>使用系统调用在目标进程直接创建线程，提供更高级的线程创建功能</td>
+</tr>
+<tr>
+<td>QueueUserAPC()</td>
+<td>向目标进程内核对象队列中加入需要运行的用户空间异步过程调用（APC),被线程从APC队列中取出并执行</td>
+</tr>
+<tr>
+<td>SetWindowsHookEx()</td>
+<td>Windows中的函数，运行应用程序注入到其它应用程序的消息循环中，监控或处理这些应用程序收到的消息</td>
+</tr>
+<tr>
+<td>RtlCreateUserThread()</td>
+<td>来自NTDLL的函数，主要用户底层或者驱动中，支持更多安全参数，可以运行在更高版本和CreateRemoteThread类似</td>
+</tr>
+<tr>
+<td>SetThreadContext()</td>
+<td>Windows中的函数，允许设置一个线程的cpu上下文</td>
+</tr>
+<tr>
+<td>Reflective DLL</td>
+<td>反射式注入，不需要建立远程线程来加载dll,直接复制dll到目标进程空闲内存区域中。</td>
+</tr>
+</tbody></table>
+<p>本文主要讨论第一个函数，简单入门，让我们先看看这个函数的定义吧！</p>
+<h2 id="CreateRemoteThread"><a href="#CreateRemoteThread" class="headerlink" title="CreateRemoteThread()"></a>CreateRemoteThread()</h2><figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span><span class="string">&lt;Windows.h&gt;</span></span></span><br><span class="line"><span class="comment">//函数原型</span></span><br><span class="line"><span class="function">HANDLE  <span class="title">CreateRemoteThread</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">    Handle hProcess,                        </span></span></span><br><span class="line"><span class="params"><span class="function">    LPSECURITY_ATTRIBUTES lpThreadAttributes,</span></span></span><br><span class="line"><span class="params"><span class="function">    SIZE_T dwStackSize,</span></span></span><br><span class="line"><span class="params"><span class="function">    LPTHREAD_START_ROUTINE lpStartAddress,</span></span></span><br><span class="line"><span class="params"><span class="function">    LPVOID lpParameter,</span></span></span><br><span class="line"><span class="params"><span class="function">    DWORD dwCreationFlags,</span></span></span><br><span class="line"><span class="params"><span class="function">    LPDWORD lpThreadId)</span></span>;</span><br><span class="line"><span class="comment">//参数解释</span></span><br><span class="line"><span class="comment">//1,hProcess  -- 目标进程的进程句柄，一般通过获取进程id来获取，HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, 1, pid);pid为进程id</span></span><br><span class="line"><span class="comment">//2,lpThreadAttributes   -- 线程安全描述符，一般为NULL</span></span><br><span class="line"><span class="comment">//3,dwStackSize   --- 新的线程栈大小，0表示使用默认大小</span></span><br><span class="line"><span class="comment">//4,lpStartAddress   --- 新线程的入口函数，需要是可执行代码地址，这个一般用来加载注入的代码，ex:(LPTHREAD_START_ROUTINE)loadLibraryA</span></span><br><span class="line"><span class="comment">//5,lpParameter   --- 传给新线程的参数</span></span><br><span class="line"><span class="comment">//6,dwCreationFlags  --- 新线程创建标志，一般为0</span></span><br><span class="line"><span class="comment">//7,lpThreadId   ---  接收新线程的ID地址</span></span><br><span class="line"><span class="comment">//return HANDLE --- 返回值,如果成功返回新线程的句柄，失败返回NULL.</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="目标程序"><a href="#目标程序" class="headerlink" title="目标程序"></a>目标程序</h2><p>我们来个简单的例子，我们自己写一个程序，然后注入线程，修改函数。</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;Windows.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;iostream&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">void</span> <span class="title">function</span><span class="params">()</span> </span>&#123;</span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;normal working state on:&quot;</span> &lt;&lt; *function &lt;&lt; std::endl;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">int</span> <span class="title">main</span><span class="params">()</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">	<span class="built_in">SetConsoleTitle</span>(<span class="built_in">TEXT</span>(<span class="string">&quot;TESTAPP&quot;</span>));</span><br><span class="line"></span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;program start:&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">	<span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">		<span class="built_in">Sleep</span>(<span class="number">1000</span>);</span><br><span class="line">		<span class="built_in">function</span>();</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="built_in">getchar</span>();</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这个就是我们需要注入的应用，很简单对吧，就是循环调用一个函数，打印函数地址，并且还设置了项目的控制台窗口的标题文本，方便我们等会进行查找，那我们注入的目的，就是修改这个unction函数，替换为我们自己的函数。 </p>
+<p><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/1.PNG"></p>
+<p>​		这个地址是每次运行都会变的，我们还需要找到这个函数的基地址（简单来说就是编译后，每次运行这个地址都不会变），相信大家都用过什么xx修改器吧，我记得我小时候玩游戏用过，好像是烧饼修改器，大伙应该都很熟悉，例如游戏金币为30，然后打开修改器搜索这个数字，肯定会有一大串出来，然后去改变这个值，增加或者减少，来个几次，就会发现只剩下一个（ps:那会反逆向还不是很厉害，基本都能通过这个检测，稍微复杂点的也就是修改完后，还会有个小小的对比检测，这里不深入讨论），然后我们通过修改这个值就可以修改金币的数字了，但是这个有个缺点，就是每次运行，这个地址都会改变，只有使用基地址，那么每次运行都可以使用，相信大家已经有了一个大概的印象了吧，非常简单的一个概念。</p>
+<p>​		那我们这里就不使用那么复杂的去找了，我们直接使用我们的vs工具进行查看（ps:也可以使用ollydbg,IDA,或者X64dbg…),在function()函数前面打一个断点，然后点击调试，然后程序就会停在断点处，这个时候我们右键，转到反汇编。</p>
+<p><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2.PNG"></p>
+<p>就会看到这样的画面，我们找到function，然后看到那个call，后面的:function(),括号里面的就是function的基地址，记住这个值，等会我们需要用到。</p>
+<h2 id="注入内容"><a href="#注入内容" class="headerlink" title="注入内容"></a>注入内容</h2><p>下面我们需要编写的就是，根据地址，我们去修改内容，让function去执行我们自己的函数。这一部分可能比较复杂，请耐心阅读。</p>
+<p>这次我们要编写的是动态库，需要vs右键项目属性，配置类型改为动态库.dll</p>
+<p>这次我们就不全部放在一起，我们进行拆开，每一部分单独解释</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">DWORD functionAddress = <span class="number">0x411320</span>;</span><br><span class="line"><span class="comment">//这个就是我们上一步拿到的地址，我们需要hook的目标函数的地址</span></span><br><span class="line"><span class="comment">//DWORD 就是</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="type">void</span> <span class="title">hook</span><span class="params">()</span> </span>&#123;</span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;Hooked&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">//我们自己实现的hook函数，用来替换上面的function函数，打印Hooked</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>!	!	! 下面是重点，也是难点</strong></p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">std::cout&lt;&lt;<span class="string">&quot;[+] hookAddress : &quot;</span>&lt;&lt;*hook&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line"><span class="type">const</span> <span class="type">int</span> instructionSize = <span class="number">5</span>;</span><br><span class="line"></span><br><span class="line">DWORD relativeAddress = ((DWORD)hook - (DWORD)functionAddress) - instructionSize;</span><br><span class="line"></span><br><span class="line">std::cout&lt;&lt;<span class="string">&quot;[+] relativeAddress : &quot;</span>&lt;&lt;relativeAddress&lt;&lt;std::endl;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>首先我们先看看我们注入函数的地址，然后定义一个instructionSize，可能有同学就要好奇了，为啥要是5，不能是10吗，那下面我就来仔细解释下。</p>
+<ul>
+<li><strong>step1</strong></li>
+</ul>
+<p>我们使用的是x86编译器，也就是32位的程序，所以我们的指令也要匹配32位，大家可能对汇编不是很熟悉，没关系，在这里只需要了解就行，就像刚才我们反汇编第一个程序那样，都基本可以看到这些指令</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">//基本汇编指令</span><br><span class="line">00xxxxxx push ebp</span><br><span class="line">00xxxxxx move ebp,esp</span><br><span class="line">00xxxxxx sub  esp,8</span><br><span class="line">00xxxxxx move eax,1</span><br><span class="line">00xxxxxx add  eax, [ebp-4]</span><br><span class="line">00xxxxxx call sub_401090</span><br><span class="line">00xxxxxx jmp  short loc_401056</span><br><span class="line">00xxxxxx retn</span><br></pre></td></tr></table></figure>
+
+<p>在这里，我们只需要关注jmp指令就行。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">//jmp</span><br><span class="line">E9 xx xx xx xx</span><br></pre></td></tr></table></figure>
+
+<p>这就是在x86下，jmp指令使用的相对地址，后面为地址，在32位应用程序中，寻址为32位，就是后面那4个字节，再加上前面那个指令，刚好就为5个字节，符合指令格式，多或者少，都不行，这就是为啥要5个字节了。</p>
+<ul>
+<li><strong>step2</strong></li>
+</ul>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">DWORD relativeAddress = ((DWORD)hook - (DWORD)functionAddress) - instructionSize;</span><br></pre></td></tr></table></figure>
+
+<p>这句代码就是计算hook函数相对于要HOOK的函数的相对偏移地址</p>
+<p>因为这个时候代码已经注入，hook函数和functionAddress在同一片地址空间，就需要计算相对偏移地址，然后再减去需要的指令格式大小，上一步已经具体说明。</p>
+<ul>
+<li><strong>step3</strong></li>
+</ul>
+<p>下面需要修改内存页的保护属性，将要写入HOOK代码的内存页权限改为可执行，可读写。</p>
+<p>因为默认内存页可能只是只读或只执行，我们需要改成可写才能修改代码，并且在写入后，要恢复内存页原始的保护属性，这可以避免留下可执行且可写的内存，减少安全风险。还有一些安全防护需要内存属性修改才能绕过。如果不修改权限，直接写入执行代码会失败并造成崩溃。</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//virtualProtect</span></span><br><span class="line"><span class="function">BOOL <span class="title">VirtualProtect</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">LPVOID lpAddress,</span></span></span><br><span class="line"><span class="params"><span class="function">SIZE_T dwSize,</span></span></span><br><span class="line"><span class="params"><span class="function">DWORD flNewProtect,</span></span></span><br><span class="line"><span class="params"><span class="function">PDWORD lpflOldProtect</span></span></span><br><span class="line"><span class="params"><span class="function">)</span></span>;</span><br><span class="line"><span class="comment">//lpAddress ---  要设置权限的内存起始地址指针 </span></span><br><span class="line"><span class="comment">//dwSize    ---  内存区域的大小，即从起始地址开始的字节数</span></span><br><span class="line"><span class="comment">//flNewProtect --- 希望设置的新内存权限，ex:PAGE_EXECUTE_READWRITE,可读写，可执行</span></span><br><span class="line"><span class="comment">//lpfloldProtect --- 用于保存原始内存权限的指针变量地址</span></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">BOOL pageChange = <span class="built_in">VirtualProtect</span>((LPVOID)functionAddress, instructionSize, PAGE_EXECUTE_READWRITE, &amp;defaultProtection);</span><br></pre></td></tr></table></figure>
+
+<p>所以上面这段代码应该就能看懂了吧，函数的起始地址，区域为内存<strong>jmp指令</strong>，把这段内存改成可执行，可读写，然后保存原版的内存权限到defaultProtection.</p>
+<ul>
+<li><strong>step4</strong></li>
+</ul>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">byte jmpInstruction[instructionSize];</span><br><span class="line"></span><br><span class="line">jmpInstruction[<span class="number">0</span>] = <span class="number">0xE9</span>; <span class="comment">// jmp</span></span><br><span class="line">jmpInstruction[<span class="number">1</span>] = relativeAddress;</span><br><span class="line">jmpInstruction[<span class="number">2</span>] = (relativeAddress &gt;&gt; <span class="number">8</span>);</span><br><span class="line">jmpInstruction[<span class="number">3</span>] = (relativeAddress &gt;&gt; <span class="number">16</span>);</span><br><span class="line">jmpInstruction[<span class="number">4</span>] = (relativeAddress &gt;&gt; <span class="number">24</span>);</span><br></pre></td></tr></table></figure>
+
+<p>我们可以查询到，jmp的操作码就为<strong>0xE9</strong>,所以我们构造跳转指令，然后就要构造偏移地址，首先就是，必须把32位的地址拆分存储到这4个字节中了，如果我们只设置那个<strong>jmpInstruction[1]</strong>,那么32位就会丢失后面的24位，所以我们要把地址拆分，逐个放在这个指令字节中。</p>
+<p>好了，这一步，我们已经构造好了jmp指令，要跳转的地址也写入了，下面就是写入到内存中。</p>
+<ul>
+<li><strong>step5</strong></li>
+</ul>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">SIZE_T bytesWritten;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span> lpWrite = <span class="built_in">WriteProcessMemory</span>(<span class="built_in">GetCurrentProcess</span>(), (LPVOID)functionAddress, jmpInstruction, instructionSize, &amp;bytesWritten);</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">BOOL <span class="title">WriteProcessMemory</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">HANDLE hProcess,</span></span></span><br><span class="line"><span class="params"><span class="function">LPVOID lpBaseAddress,</span></span></span><br><span class="line"><span class="params"><span class="function">LPCVOID lpBuffer,</span></span></span><br><span class="line"><span class="params"><span class="function">SIZE_T nSize,</span></span></span><br><span class="line"><span class="params"><span class="function">SIZE_T *lpNumberOfByteWriteen</span></span></span><br><span class="line"><span class="params"><span class="function">)</span></span>;</span><br><span class="line"><span class="comment">//hProcess --- 要写入的目标进程句柄</span></span><br><span class="line"><span class="comment">//lpBaseAddress --- 目标进程地址空间中的写入地址</span></span><br><span class="line"><span class="comment">//lpBuffer  ---  包含要写入数据的缓冲区地址</span></span><br><span class="line"><span class="comment">//nSize  --- 要写入的数据大小</span></span><br><span class="line"><span class="comment">//lpNumberOfBytewritten --- 返回实际写入的字节数</span></span><br></pre></td></tr></table></figure>
+
+<p>如同你看到的那样，把jmp指令写入到functionaddress函数地址后，每次call这个函数的时候，执行到后面jmp指令，就会直接跳转到我们自己的hook函数地址，中间这段也就是属于原本函数的指令不执行。这样我们就完成了内存写入！</p>
+<p>！！！但是，别着急，还有一步，记得我们上一步修改了一段内存的属性吧，现在我们要将这段内存的属性修改回去</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">DWORD oldProtect;</span><br><span class="line">pageChange = <span class="built_in">VirtualProtect</span>((LPVOID)functionAddress, instructionSize, defaultProtection, &amp;oldProtect);</span><br></pre></td></tr></table></figure>
+
+<p>原理和上面类似，这里就不多赘述了。</p>
+<p><strong>step6</strong></p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="type">bool</span> WINAPI <span class="title">DllMain</span><span class="params">(HINSTANCE hinstDLL,	DWORD fdwReason, LPVOID lpReserved)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">switch</span> (fdwReason)</span><br><span class="line">	&#123;</span><br><span class="line">	<span class="keyword">case</span> DLL_PROCESS_ATTACH:</span><br><span class="line">		<span class="built_in">CreateThread</span>(<span class="number">0</span>, <span class="number">0</span>, thread, hinstDLL, <span class="number">0</span>, <span class="number">0</span>);</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line">	<span class="keyword">case</span> DLL_THREAD_ATTACH:</span><br><span class="line">	<span class="keyword">case</span> DLL_THREAD_DETACH:</span><br><span class="line">	<span class="keyword">case</span> DLL_PROCESS_DETACH:</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>DllMain函数就是DLL被加载和卸载时会被调用的函数，用来做初始化和清洁的工作。</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">BOOL WINAPI <span class="title">DLLMain</span><span class="params">(</span></span></span><br><span class="line"><span class="params"><span class="function">HINSTANCE hinstDLL,</span></span></span><br><span class="line"><span class="params"><span class="function">DWORD fdwReason,</span></span></span><br><span class="line"><span class="params"><span class="function">LPVOID lpvReserved</span></span></span><br><span class="line"><span class="params"><span class="function">)</span></span>;</span><br><span class="line"><span class="comment">// hinstDll --- 该DLL的实例句柄</span></span><br><span class="line"><span class="comment">// fdwReason --- 调用原因：</span></span><br><span class="line"><span class="comment">//DLL_PROCESS_ATTACH -- DLL被进程加载时调用</span></span><br><span class="line"><span class="comment">//DLL_THREAD_ATTACH -- 线程加载DLL时调用</span></span><br><span class="line"><span class="comment">//DLL_THREAD_DETACH  -- 线程卸载DLL时调用</span></span><br><span class="line"><span class="comment">//DLL_PROCESS_DETACH -- 进程卸载DLL时调用</span></span><br><span class="line"><span class="comment">//lpvReserved   --- 保留参数，一般为NULL</span></span><br></pre></td></tr></table></figure>
+
+<p>使用这个函数，我们就能在dll被调用的时候进行注入代码了</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">DWORD WINAPI <span class="title">thread</span><span class="params">(LPVOID param)</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;[+] Thread started&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">	<span class="built_in">writeTheHook</span>();</span><br><span class="line">	<span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">		<span class="built_in">Sleep</span>(<span class="number">100</span>);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="built_in">FreeLibraryAndExitThread</span>((HMODULE)param, <span class="number">0</span>);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这段就是上面那个createThread调用的线程代码，就是执行我们的注入比较简单，这里就提一下，只要注意结束的时候进行线程清理。</p>
+<p>好了，到这里，DLL的功能已经制作完成，下面给上完整代码</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;Windows.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;iostream&gt;</span></span></span><br><span class="line"></span><br><span class="line">DWORD functionAddress = <span class="number">0x411320</span>; <span class="comment">//修改为你自己的函数地址</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">void</span> <span class="title">hook</span><span class="params">()</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;Hooked&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">void</span> <span class="title">writeTheHook</span><span class="params">()</span> </span>&#123;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] hookAddress : &quot;</span>&lt;&lt;*hook&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	<span class="type">const</span> <span class="type">int</span> instructionSize = <span class="number">5</span>;</span><br><span class="line"></span><br><span class="line">	DWORD relativeAddress = ((DWORD)hook - (DWORD)functionAddress) - instructionSize;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] relativeAddress : &quot;</span>&lt;&lt;relativeAddress&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	DWORD defaultProtection;</span><br><span class="line">	BOOL pageChange = <span class="built_in">VirtualProtect</span>((LPVOID)functionAddress, instructionSize, PAGE_EXECUTE_READWRITE, &amp;defaultProtection);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!pageChange)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to VirtualProtect&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	byte jmpInstruction[instructionSize];</span><br><span class="line"></span><br><span class="line">	jmpInstruction[<span class="number">0</span>] = <span class="number">0xE9</span>; <span class="comment">// jmp</span></span><br><span class="line">	jmpInstruction[<span class="number">1</span>] = relativeAddress;</span><br><span class="line">	jmpInstruction[<span class="number">2</span>] = (relativeAddress &gt;&gt; <span class="number">8</span>);</span><br><span class="line">	jmpInstruction[<span class="number">3</span>] = (relativeAddress &gt;&gt; <span class="number">16</span>);</span><br><span class="line">	jmpInstruction[<span class="number">4</span>] = (relativeAddress &gt;&gt; <span class="number">24</span>);</span><br><span class="line"></span><br><span class="line">	SIZE_T bytesWritten;</span><br><span class="line"></span><br><span class="line">	<span class="type">int</span> lpWrite = <span class="built_in">WriteProcessMemory</span>(<span class="built_in">GetCurrentProcess</span>(), (LPVOID)functionAddress, jmpInstruction, instructionSize, &amp;bytesWritten);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!lpWrite)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to WriteProcessMemory&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] Jump writed at 0x%x&quot;</span>&lt;&lt;functionAddress&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	DWORD oldProtect;</span><br><span class="line">	pageChange = <span class="built_in">VirtualProtect</span>((LPVOID)functionAddress, instructionSize, defaultProtection, &amp;oldProtect);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!pageChange)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout &lt;&lt; <span class="string">&quot;[-] Fail to VirtualProtect&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">		<span class="keyword">return</span>;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function">DWORD WINAPI <span class="title">thread</span><span class="params">(LPVOID param)</span> </span>&#123;</span><br><span class="line">	std::cout &lt;&lt; <span class="string">&quot;[+] Thread started&quot;</span> &lt;&lt; std::endl;</span><br><span class="line">	<span class="built_in">writeTheHook</span>();</span><br><span class="line">	<span class="keyword">while</span> (<span class="literal">true</span>) &#123;</span><br><span class="line">		<span class="built_in">Sleep</span>(<span class="number">100</span>);</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="built_in">FreeLibraryAndExitThread</span>((HMODULE)param, <span class="number">0</span>);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">bool</span> WINAPI <span class="title">DllMain</span><span class="params">(HINSTANCE hinstDLL,	DWORD fdwReason, LPVOID lpReserved)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">switch</span> (fdwReason)</span><br><span class="line">	&#123;</span><br><span class="line">	<span class="keyword">case</span> DLL_PROCESS_ATTACH:</span><br><span class="line">		<span class="built_in">CreateThread</span>(<span class="number">0</span>, <span class="number">0</span>, thread, hinstDLL, <span class="number">0</span>, <span class="number">0</span>);</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line">	<span class="keyword">case</span> DLL_THREAD_ATTACH:</span><br><span class="line">	<span class="keyword">case</span> DLL_THREAD_DETACH:</span><br><span class="line">	<span class="keyword">case</span> DLL_PROCESS_DETACH:</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>然后进行编译生成</p>
+<p><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/3.PNG"></p>
+<h2 id="注入器"><a href="#注入器" class="headerlink" title="注入器"></a>注入器</h2><p>我们只是编写好了DLL的代码，但是我们想要注入的那个程序是不可能调用我们这个DLL的，所以我们还需要一个注入器</p>
+<p><strong>step1</strong></p>
+<p>加载一些库函数和找到目标进程</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">DWORD pid;</span><br><span class="line"></span><br><span class="line"><span class="comment">//加载library</span></span><br><span class="line">HMODULE kernel32 = <span class="built_in">LoadLibrary</span>(<span class="string">&quot;kernel32.dll&quot;</span>);</span><br><span class="line"></span><br><span class="line">LPVOID loadLibraryA = <span class="built_in">GetProcAddress</span>(kernel32, <span class="string">&quot;LoadLibraryA&quot;</span>);</span><br><span class="line"></span><br><span class="line">HWND hwnd = <span class="built_in">FindWindow</span>(<span class="number">0</span>, <span class="built_in">TEXT</span>(<span class="string">&quot;TESTAPP&quot;</span>));</span><br><span class="line"></span><br><span class="line"><span class="built_in">GetWindowThreadProcessId</span>(hwnd, &amp;pid);</span><br><span class="line"></span><br><span class="line">HANDLE hProc = <span class="built_in">OpenProcess</span>(PROCESS_ALL_ACCESS, <span class="number">1</span>, pid);</span><br><span class="line"></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>首先加载win函数库，我们需要loadLibraryA去加载库文件，所以我们要先引入<strong>kernel32.dll</strong></p>
+<p>然后用GetProcAddress得到函数地址</p>
+<p>现在知道为啥在第一步中设置那个title了吧，我们就可以直接使用TESTAPP来得到窗口，</p>
+<p>然后再调用函数得到<strong>PID</strong></p>
+<p><strong>step2</strong></p>
+<p>加载我们的DLL</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">const</span> <span class="type">char</span>* path = <span class="string">&quot;D:\\lib.dll&quot;</span>;</span><br><span class="line"><span class="comment">//分配内存空间</span></span><br><span class="line">LPVOID pathAddress = <span class="built_in">VirtualAllocEx</span>(hProc, <span class="literal">NULL</span>, <span class="built_in">strlen</span>(path), (MEM_COMMIT | MEM_RESERVE), <span class="number">0x40</span>);</span><br><span class="line">SIZE_T bytesWritten = <span class="number">0</span>;</span><br><span class="line"><span class="type">int</span> lpWrite = <span class="built_in">WriteProcessMemory</span>(hProc, pathAddress, path, <span class="built_in">strlen</span>(path), &amp;bytesWritten);</span><br></pre></td></tr></table></figure>
+
+<p>我们要先传入dll的路径，并且分配内存空间</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">LPVOID VirtualAllocEx(</span><br><span class="line">HANDLE hProcess,</span><br><span class="line">LPVOID lpAddress,</span><br><span class="line">SIZE_T dwSize,</span><br><span class="line">DWORD flAllocationType,</span><br><span class="line">DWORD flProtect</span><br><span class="line">);</span><br><span class="line">//hProcess --- 要在其地址空间分配内存的进程句柄</span><br><span class="line">//lpAddress  --- 分配的内存大小</span><br><span class="line">//dwSize   ---  分配的内存大小</span><br><span class="line">//flProtect --- 内存保护属性</span><br><span class="line">//flAllocation --- 内存类型，如MEM_COMMIT</span><br><span class="line">//此函数可以向打开的目标进程地址安全地分配可控内存块，是DLL注入中非常重要的函数</span><br></pre></td></tr></table></figure>
+
+<p>下面那个writeProcessMemory我们上面分析过，这里略过</p>
+<ul>
+<li><strong>step3</strong></li>
+</ul>
+<p>创建远程线程注入</p>
+<p>终于到了最后了，也是我们开头提到的远程线程注入</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">HANDLE remoteProc = <span class="built_in">CreateRemoteThread</span>(hProc, <span class="literal">NULL</span>,	<span class="number">0</span>, (LPTHREAD_START_ROUTINE)loadLibraryA, pathAddress, <span class="number">0</span>, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+
+<p>简单解释下，就是在hProc进程中创建了一个线程，去执行LoadLibraryA,也就是加载dll库的win函数，然后参数就是dll的路径。</p>
+<p>下面是这一部分的完整代码</p>
+<figure class="highlight c++"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;Windows.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;iostream&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="type">int</span> <span class="title">main</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	DWORD pid;</span><br><span class="line"></span><br><span class="line">	<span class="comment">//加载library</span></span><br><span class="line">	HMODULE kernel32 = <span class="built_in">LoadLibrary</span>(<span class="string">&quot;kernel32.dll&quot;</span>);</span><br><span class="line"></span><br><span class="line">	LPVOID loadLibraryA = <span class="built_in">GetProcAddress</span>(kernel32, <span class="string">&quot;LoadLibraryA&quot;</span>);</span><br><span class="line"></span><br><span class="line">	HWND hwnd = <span class="built_in">FindWindow</span>(<span class="number">0</span>, <span class="built_in">TEXT</span>(<span class="string">&quot;TESTAPP&quot;</span>));</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!hwnd) &#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to FindWindow&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="built_in">GetWindowThreadProcessId</span>(hwnd, &amp;pid);</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] PID of target : &quot;</span>&lt;&lt;pid&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	HANDLE hProc = <span class="built_in">OpenProcess</span>(PROCESS_ALL_ACCESS, <span class="number">1</span>, pid);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (hProc == INVALID_HANDLE_VALUE) &#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to OpenProcess&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	</span><br><span class="line">	<span class="type">const</span> <span class="type">char</span>* path = <span class="string">&quot;D:lib.dll&quot;</span>; <span class="comment">//换成你自己的路径</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">//分配内存空间</span></span><br><span class="line">	LPVOID pathAddress = <span class="built_in">VirtualAllocEx</span>(hProc, <span class="literal">NULL</span>, <span class="built_in">strlen</span>(path), (MEM_COMMIT | MEM_RESERVE), <span class="number">0x40</span>);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!pathAddress)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to VirtualAllocEx&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] pathAddress in target : &quot;</span>&lt;&lt;pathAddress&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	SIZE_T bytesWritten = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="type">int</span> lpWrite = <span class="built_in">WriteProcessMemory</span>(hProc, pathAddress, path, <span class="built_in">strlen</span>(path), &amp;bytesWritten);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!lpWrite)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to WriteProcessMemory&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] Bytes written : &quot;</span>&lt;&lt;bytesWritten&lt;&lt;std::endl;</span><br><span class="line"></span><br><span class="line">	HANDLE remoteProc = <span class="built_in">CreateRemoteThread</span>(hProc, <span class="literal">NULL</span>,	<span class="number">0</span>, (LPTHREAD_START_ROUTINE)loadLibraryA, pathAddress, <span class="number">0</span>, <span class="literal">NULL</span>);</span><br><span class="line">	<span class="keyword">if</span> (!remoteProc)</span><br><span class="line">	&#123;</span><br><span class="line">		std::cout&lt;&lt;<span class="string">&quot;[-] Fail to CreateRemoteThread&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	std::cout&lt;&lt;<span class="string">&quot;[+] Injected&quot;</span>&lt;&lt;std::endl;</span><br><span class="line">	</span><br><span class="line">	<span class="built_in">CloseHandle</span>(hProc);</span><br><span class="line">	</span><br><span class="line">	<span class="built_in">getchar</span>();</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+
+
+
+
+<h2 id="演示结果"><a href="#演示结果" class="headerlink" title="演示结果"></a>演示结果</h2><p>我们先运行我们要注入的那个程序，走起！</p>
+<p><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/4.PNG"></p>
+<p>正常打印，这个函数的地址</p>
+<p>下面见证奇迹的时刻，我们来运行注入器，一定要确保dll的路径设置正确。</p>
+<p><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/5.PNG"></p>
+<p>看到了吧，这就是逆向中的远程线程注入，好了，这篇博客也就到这了，希望大家都能有所收获，我会将代码上传到GitHub上,有需要的可以下载学习。</p>
+<p><a target="_blank" rel="noopener" href="https://github.com/HuaDong1120/WindowsHooking">GitHub代码链接</a></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://huadongblog.top">HD</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/">https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://huadongblog.top" target="_blank">HD-Blog</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E9%80%86%E5%90%91/">逆向</a></div><div class="post-share"><div class="social-share" data-image="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div><div class="comment-switch"><span class="first-comment">Valine</span><span id="switch-btn"></span><span class="second-comment">Disqus</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div><div><div id="disqus_thread"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/3B8E772D51765C282A3959BF9EFBED3D.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">HD</div><div class="author-info-description">这是我的网站，用来记录学习和有趣的事</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">2</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">2</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">2</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://huadong1120.github.io/"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://huadong1120.github.io" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:hd1504134593@gmail.com" target="_blank" title="Email"><i class="fas fa-envelope" style="color: #4a7dbe;"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">This is my Blog</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E9%80%86%E5%90%91%E4%B9%8B%E8%BF%9C%E7%A8%8B%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5"><span class="toc-number">1.</span> <span class="toc-text">逆向之远程线程注入</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#CreateRemoteThread"><span class="toc-number">1.1.</span> <span class="toc-text">CreateRemoteThread()</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%9B%AE%E6%A0%87%E7%A8%8B%E5%BA%8F"><span class="toc-number">1.2.</span> <span class="toc-text">目标程序</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B3%A8%E5%85%A5%E5%86%85%E5%AE%B9"><span class="toc-number">1.3.</span> <span class="toc-text">注入内容</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B3%A8%E5%85%A5%E5%99%A8"><span class="toc-number">1.4.</span> <span class="toc-text">注入器</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%BC%94%E7%A4%BA%E7%BB%93%E6%9E%9C"><span class="toc-number">1.5.</span> <span class="toc-text">演示结果</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/" title="初识逆向技术--线程注入"><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/2W.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="初识逆向技术--线程注入"/></a><div class="content"><a class="title" href="/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/" title="初识逆向技术--线程注入">初识逆向技术--线程注入</a><time datetime="2023-08-23T11:46:39.000Z" title="发表于 2023-08-23 19:46:39">2023-08-23</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2023/08/20/C-%E4%B8%AD%E7%9A%84Asio%E5%BA%93/" title="C++著名库Boost.asio"><img src="https://hdblog-image.oss-cn-nanjing.aliyuncs.com/image/asio.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="C++著名库Boost.asio"/></a><div class="content"><a class="title" href="/2023/08/20/C-%E4%B8%AD%E7%9A%84Asio%E5%BA%93/" title="C++著名库Boost.asio">C++著名库Boost.asio</a><time datetime="2023-08-20T10:22:07.000Z" title="发表于 2023-08-20 18:22:07">2023-08-20</time></div></div></div></div></div></div></main><footer id="footer"><div id="footer-wrap"><div class="copyright">&copy;2019 - 2025 By HD</div><div class="framework-info"><span>框架 </span><a target="_blank" rel="noopener" href="https://hexo.io">Hexo</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly</a></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><div class="js-pjax"><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: '',
+      appKey: '',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: false,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+
+  const disqusReset = conf => {
+    window.DISQUS && window.DISQUS.reset({
+      reload: true,
+      config: conf
+    })
+  }
+
+  const loadDisqus = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyDisqus = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    window.disqus_identifier = isShuoshuo ? path : '/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/'
+    window.disqus_url = isShuoshuo ? location.origin + path : 'https://huadongblog.top/2023/08/23/%E5%88%9D%E5%A7%8B%E9%80%86%E5%90%91%E6%8A%80%E6%9C%AF-%E7%BA%BF%E7%A8%8B%E6%B3%A8%E5%85%A5/'
+
+    const disqus_config = function () {
+      this.page.url = disqus_url
+      this.page.identifier = disqus_identifier
+      this.page.title = '初识逆向技术--线程注入'
+    }
+
+    if (window.DISQUS) disqusReset(disqus_config)
+    else {
+      const script = document.createElement('script')
+      script.src = 'https://.disqus.com/embed.js'
+      script.setAttribute('data-timestamp', +new Date())
+      document.head.appendChild(script)
+    }
+
+    btf.addGlobalFn('themeChange', () => disqusReset(disqus_config), 'disqus')
+  }
+
+  const getCount = async() => {
+    try {
+      const eleGroup = document.querySelector('#post-meta .disqus-comment-count')
+      if (!eleGroup) return
+      const cleanedLinks = eleGroup.href.replace(/#post-comment$/, '')
+
+      const res = await fetch(`https://disqus.com/api/3.0/threads/set.json?forum=&api_key=&thread:link=${cleanedLinks}`,{
+        method: 'GET'
+      })
+      const result = await res.json()
+
+      const count = result.response.length ? result.response[0].posts : 0
+      eleGroup.textContent = count
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Disqus'
+      ? window.shuoshuoComment = { loadComment: loadDisqus }
+      : window.loadOtherComment = loadDisqus
+    return
+  }
+
+  if ('Valine' === 'Disqus' || !false) {
+    if (false) btf.loadComment(document.getElementById('disqus_thread'), loadDisqus)
+    else {
+      loadDisqus()
+      
+    }
+  } else {
+    window.loadOtherComment = loadDisqus
+  }
+})()</script></div><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
