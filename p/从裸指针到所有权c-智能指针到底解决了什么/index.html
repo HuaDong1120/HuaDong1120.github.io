@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="从裸指针到所有权：C++ 智能指针到底解决了什么 一，裸指针的三类典型灾难 1，忘记delete（泄露) 通俗理解：“借了房间，退房没交钥匙，但酒店一直以为你在住，持续计费。“ 你向系统申请了一块内存空间(new),用完后忘记归还(没有delete)。这块内存虽然你不再使用了，但是系统以为你还在用，所以不能分配给别人。 后果：程序运行时间越长，占用的内存就越多，最后耗尽电脑内存，导致程序甚至系统崩溃。 代码示例： 1 2 3 4 5 6 void memoryLeak() { int* ptr = new int(10); // 申请了内存 // 做了一些事情... return; // 函数结束了，但是忘记写 delete ptr; // 这块内存永远丢失了，直到程序结束 } 2，重复delete(双重释放/Double free) 通俗理解：“退房之后，又跑去前台再退一次房。” 你已经把这块内存归还给系统了，然后你又拿着同一个地址又去归还一次。 后果：破坏了内存管理器的内部结构。第一次归还后，这块内存可能又被分配给别的变量了，你再强制回收，会导致程序立即崩溃（Crash),或者破坏其他正常数据。 代码示例： 1 2 3 4 5 6 7 8 void doubleFree() { int* ptr = new int(10); delete ptr; // 第一次释放，正常 // ... 中间可能经过了复杂的逻辑 ... delete ptr; // 第二次释放同一个地址 -&gt; 灾难！程序崩溃 } 3，早删/悬垂（使用已释放内存/Use-after-free) 通俗理解：“房已经退了，新客人可能已经入住了，你还拿着备用钥匙进去睡觉。” 你把内存释放了（delete），但是你手里的指针变量还在（此时它变成了“悬垂指针”/ Dangling Pointer）。如果你后续又通过这个指针去读取或写入数据，就是“Use-after-free”。 后果：这是最危险的情况。 运气好：程序立刻崩溃。 运气不好：程序没有崩溃，但你覆盖了那一块内存里此时存放的别人的数据（比如新客人的行李），导致数据错乱，产生极难排查的 Bug。 代码示例： 1 2 3 4 5 6 7 8 9 void useAfterFree() { int* ptr = new int(10); delete ptr; // 内存已归还，ptr 变成了“悬垂指针” // ... *ptr = 20; // 错误！向已经不属于你的内存写入数据 // 此时这块内存可能已经被系统分配给其他变量使用了 } 二，“资源”不只是内存：文件句柄、锁、socket 核心含义：在编程中（尤其是 C++），你需要手动管理的不仅仅是“内存条里的空间”，还有操作系统提供的其他有限资源。如果这些资源用完不还，后果可能比内存泄漏更严重。\n">
+<title>从裸指针到所有权：C&#43;&#43; 智能指针到底解决了什么</title>
+
+<link rel='canonical' href='https://HuaDong1120.github.io/p/%E4%BB%8E%E8%A3%B8%E6%8C%87%E9%92%88%E5%88%B0%E6%89%80%E6%9C%89%E6%9D%83c-%E6%99%BA%E8%83%BD%E6%8C%87%E9%92%88%E5%88%B0%E5%BA%95%E8%A7%A3%E5%86%B3%E4%BA%86%E4%BB%80%E4%B9%88/'>
+
+<link rel="stylesheet" href="/scss/style.min.833d6eed45de56f48306bf57268d5b8cdfc8a60e8e7bdc99810464fcd033f7c6.css"><meta property='og:title' content="从裸指针到所有权：C++ 智能指针到底解决了什么">
+<meta property='og:description' content="从裸指针到所有权：C++ 智能指针到底解决了什么 一，裸指针的三类典型灾难 1，忘记delete（泄露) 通俗理解：“借了房间，退房没交钥匙，但酒店一直以为你在住，持续计费。“ 你向系统申请了一块内存空间(new),用完后忘记归还(没有delete)。这块内存虽然你不再使用了，但是系统以为你还在用，所以不能分配给别人。 后果：程序运行时间越长，占用的内存就越多，最后耗尽电脑内存，导致程序甚至系统崩溃。 代码示例： 1 2 3 4 5 6 void memoryLeak() { int* ptr = new int(10); // 申请了内存 // 做了一些事情... return; // 函数结束了，但是忘记写 delete ptr; // 这块内存永远丢失了，直到程序结束 } 2，重复delete(双重释放/Double free) 通俗理解：“退房之后，又跑去前台再退一次房。” 你已经把这块内存归还给系统了，然后你又拿着同一个地址又去归还一次。 后果：破坏了内存管理器的内部结构。第一次归还后，这块内存可能又被分配给别的变量了，你再强制回收，会导致程序立即崩溃（Crash),或者破坏其他正常数据。 代码示例： 1 2 3 4 5 6 7 8 void doubleFree() { int* ptr = new int(10); delete ptr; // 第一次释放，正常 // ... 中间可能经过了复杂的逻辑 ... delete ptr; // 第二次释放同一个地址 -&gt; 灾难！程序崩溃 } 3，早删/悬垂（使用已释放内存/Use-after-free) 通俗理解：“房已经退了，新客人可能已经入住了，你还拿着备用钥匙进去睡觉。” 你把内存释放了（delete），但是你手里的指针变量还在（此时它变成了“悬垂指针”/ Dangling Pointer）。如果你后续又通过这个指针去读取或写入数据，就是“Use-after-free”。 后果：这是最危险的情况。 运气好：程序立刻崩溃。 运气不好：程序没有崩溃，但你覆盖了那一块内存里此时存放的别人的数据（比如新客人的行李），导致数据错乱，产生极难排查的 Bug。 代码示例： 1 2 3 4 5 6 7 8 9 void useAfterFree() { int* ptr = new int(10); delete ptr; // 内存已归还，ptr 变成了“悬垂指针” // ... *ptr = 20; // 错误！向已经不属于你的内存写入数据 // 此时这块内存可能已经被系统分配给其他变量使用了 } 二，“资源”不只是内存：文件句柄、锁、socket 核心含义：在编程中（尤其是 C++），你需要手动管理的不仅仅是“内存条里的空间”，还有操作系统提供的其他有限资源。如果这些资源用完不还，后果可能比内存泄漏更严重。\n">
+<meta property='og:url' content='https://HuaDong1120.github.io/p/%E4%BB%8E%E8%A3%B8%E6%8C%87%E9%92%88%E5%88%B0%E6%89%80%E6%9C%89%E6%9D%83c-%E6%99%BA%E8%83%BD%E6%8C%87%E9%92%88%E5%88%B0%E5%BA%95%E8%A7%A3%E5%86%B3%E4%BA%86%E4%BB%80%E4%B9%88/'>
+<meta property='og:site_name' content='komorebi'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='c&#43;&#43;' /><meta property='article:published_time' content='2026-01-03T19:37:38&#43;08:00'/><meta property='article:modified_time' content='2026-01-03T19:37:38&#43;08:00'/>
+<meta name="twitter:title" content="从裸指针到所有权：C++ 智能指针到底解决了什么">
+<meta name="twitter:description" content="从裸指针到所有权：C++ 智能指针到底解决了什么 一，裸指针的三类典型灾难 1，忘记delete（泄露) 通俗理解：“借了房间，退房没交钥匙，但酒店一直以为你在住，持续计费。“ 你向系统申请了一块内存空间(new),用完后忘记归还(没有delete)。这块内存虽然你不再使用了，但是系统以为你还在用，所以不能分配给别人。 后果：程序运行时间越长，占用的内存就越多，最后耗尽电脑内存，导致程序甚至系统崩溃。 代码示例： 1 2 3 4 5 6 void memoryLeak() { int* ptr = new int(10); // 申请了内存 // 做了一些事情... return; // 函数结束了，但是忘记写 delete ptr; // 这块内存永远丢失了，直到程序结束 } 2，重复delete(双重释放/Double free) 通俗理解：“退房之后，又跑去前台再退一次房。” 你已经把这块内存归还给系统了，然后你又拿着同一个地址又去归还一次。 后果：破坏了内存管理器的内部结构。第一次归还后，这块内存可能又被分配给别的变量了，你再强制回收，会导致程序立即崩溃（Crash),或者破坏其他正常数据。 代码示例： 1 2 3 4 5 6 7 8 void doubleFree() { int* ptr = new int(10); delete ptr; // 第一次释放，正常 // ... 中间可能经过了复杂的逻辑 ... delete ptr; // 第二次释放同一个地址 -&gt; 灾难！程序崩溃 } 3，早删/悬垂（使用已释放内存/Use-after-free) 通俗理解：“房已经退了，新客人可能已经入住了，你还拿着备用钥匙进去睡觉。” 你把内存释放了（delete），但是你手里的指针变量还在（此时它变成了“悬垂指针”/ Dangling Pointer）。如果你后续又通过这个指针去读取或写入数据，就是“Use-after-free”。 后果：这是最危险的情况。 运气好：程序立刻崩溃。 运气不好：程序没有崩溃，但你覆盖了那一块内存里此时存放的别人的数据（比如新客人的行李），导致数据错乱，产生极难排查的 Bug。 代码示例： 1 2 3 4 5 6 7 8 9 void useAfterFree() { int* ptr = new int(10); delete ptr; // 内存已归还，ptr 变成了“悬垂指针” // ... *ptr = 20; // 错误！向已经不属于你的内存写入数据 // 此时这块内存可能已经被系统分配给其他变量使用了 } 二，“资源”不只是内存：文件句柄、锁、socket 核心含义：在编程中（尤其是 C++），你需要手动管理的不仅仅是“内存条里的空间”，还有操作系统提供的其他有限资源。如果这些资源用完不还，后果可能比内存泄漏更严重。\n">
+    <link rel="shortcut icon" href="/codingbrowser_102152.ico" />
+
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/avatar_hu_d87b2d1e33807ca0.png" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+                    <span class="emoji">🌇</span>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">komorebi</a></h1>
+            <h2 class="site-description">欢迎来到我的网站。</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/HuaDong1120'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/_index.ja/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>ホーム</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/_index.zh-tw/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主頁</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>Archives</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>Search</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/links/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>Links</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="https://HuaDong1120.github.io/en/" >English</option>
+                                
+                                    <option value="https://HuaDong1120.github.io/" selected>简体中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li>
+      <ol>
+        <li><a href="#一裸指针的三类典型灾难">一，裸指针的三类典型灾难</a>
+          <ol>
+            <li><a href="#1忘记delete泄露">1，忘记delete（泄露)</a></li>
+            <li><a href="#2重复delete双重释放double-free">2，重复delete(双重释放/Double free)</a></li>
+            <li><a href="#3早删悬垂使用已释放内存use-after-free">3，早删/悬垂（使用已释放内存/Use-after-free)</a></li>
+          </ol>
+        </li>
+        <li><a href="#二资源不只是内存文件句柄锁socket">二，“资源”不只是内存：文件句柄、锁、socket</a>
+          <ol>
+            <li><a href="#1文件句柄">1，文件句柄</a></li>
+            <li><a href="#2-锁-locks--mutexes">2， 锁 (Locks / Mutexes)</a></li>
+            <li><a href="#3socket-网络套接字">3，Socket (网络套接字)</a></li>
+          </ol>
+        </li>
+        <li><a href="#三raii构造获取资源析构释放资源">三，RAII：构造获取资源、析构释放资源</a>
+          <ol>
+            <li><a href="#1核心思想">1，核心思想</a></li>
+            <li><a href="#2为什么这样做">2,为什么这样做？</a></li>
+            <li><a href="#3代码对比">3，代码对比</a></li>
+          </ol>
+        </li>
+        <li><a href="#四raii构造获取资源析构释放资源">四，RAII：构造获取资源、析构释放资源</a>
+          <ol>
+            <li><a href="#1独占型stdunique_ptr">1，独占型：std::unique_ptr</a></li>
+            <li><a href="#2共享型stdshared_ptr">2，共享型：std::shared_ptr</a></li>
+            <li><a href="#4弱引用型">4,弱引用型</a></li>
+          </ol>
+        </li>
+      </ol>
+    </li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="main-article">
+    <header class="article-header">
+
+    <div class="article-details">
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/%E4%BB%8E%E8%A3%B8%E6%8C%87%E9%92%88%E5%88%B0%E6%89%80%E6%9C%89%E6%9D%83c-%E6%99%BA%E8%83%BD%E6%8C%87%E9%92%88%E5%88%B0%E5%BA%95%E8%A7%A3%E5%86%B3%E4%BA%86%E4%BB%80%E4%B9%88/">从裸指针到所有权：C&#43;&#43; 智能指针到底解决了什么</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published" datetime='2026-01-03T19:37:38&#43;08:00'>2026-01-03</time>
+            </div>
+        
+
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="从裸指针到所有权c-智能指针到底解决了什么">从裸指针到所有权：C++ 智能指针到底解决了什么
+</h1><h3 id="一裸指针的三类典型灾难">一，裸指针的三类典型灾难
+</h3><h4 id="1忘记delete泄露">1，忘记delete（泄露)
+</h4><ul>
+<li>通俗理解：<strong>“借了房间，退房没交钥匙，但酒店一直以为你在住，持续计费。“</strong>
+你向系统申请了一块内存空间(new),用完后忘记归还(没有delete)。这块内存虽然你不再使用了，但是系统以为你还在用，所以不能分配给别人。</li>
+<li>后果：程序运行时间越长，占用的内存就越多，最后耗尽电脑内存，导致程序甚至系统崩溃。</li>
+<li>代码示例：</li>
+</ul>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span><span class="lnt">6
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="line"><span class="cl"><span class="kt">void</span> <span class="nf">memoryLeak</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">int</span><span class="o">*</span> <span class="n">ptr</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">(</span><span class="mi">10</span><span class="p">);</span> <span class="c1">// 申请了内存
+</span></span></span><span class="line"><span class="cl">    <span class="c1">// 做了一些事情...
+</span></span></span><span class="line"><span class="cl">    <span class="k">return</span><span class="p">;</span> <span class="c1">// 函数结束了，但是忘记写 delete ptr;
+</span></span></span><span class="line"><span class="cl">    <span class="c1">// 这块内存永远丢失了，直到程序结束
+</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="2重复delete双重释放double-free">2，重复delete(双重释放/Double free)
+</h4><ul>
+<li>通俗理解：<strong>“退房之后，又跑去前台再退一次房。”</strong>
+你已经把这块内存归还给系统了，然后你又拿着同一个地址又去归还一次。</li>
+<li>后果：破坏了内存管理器的内部结构。第一次归还后，这块内存可能又被分配给别的变量了，你再强制回收，会导致程序立即崩溃（Crash),或者破坏其他正常数据。</li>
+<li>代码示例：</li>
+</ul>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span><span class="lnt">6
+</span><span class="lnt">7
+</span><span class="lnt">8
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="line"><span class="cl"><span class="kt">void</span> <span class="nf">doubleFree</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">int</span><span class="o">*</span> <span class="n">ptr</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">(</span><span class="mi">10</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="k">delete</span> <span class="n">ptr</span><span class="p">;</span> <span class="c1">// 第一次释放，正常
+</span></span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// ... 中间可能经过了复杂的逻辑 ...
+</span></span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="k">delete</span> <span class="n">ptr</span><span class="p">;</span> <span class="c1">// 第二次释放同一个地址 -&gt; 灾难！程序崩溃
+</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="3早删悬垂使用已释放内存use-after-free">3，早删/悬垂（使用已释放内存/Use-after-free)
+</h4><ul>
+<li>通俗理解：<strong>“房已经退了，新客人可能已经入住了，你还拿着备用钥匙进去睡觉。”</strong>
+你把内存释放了（delete），但是你手里的指针变量还在（此时它变成了“悬垂指针”/ Dangling Pointer）。如果你后续又通过这个指针去读取或写入数据，就是“Use-after-free”。</li>
+<li>后果：这是最危险的情况。
+<ul>
+<li>运气好：程序立刻崩溃。</li>
+<li>运气不好：程序没有崩溃，但你覆盖了那一块内存里此时存放的别人的数据（比如新客人的行李），导致数据错乱，产生极难排查的 Bug。</li>
+</ul>
+</li>
+<li>代码示例：</li>
+</ul>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span><span class="lnt">6
+</span><span class="lnt">7
+</span><span class="lnt">8
+</span><span class="lnt">9
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="line"><span class="cl"><span class="kt">void</span> <span class="nf">useAfterFree</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">int</span><span class="o">*</span> <span class="n">ptr</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">(</span><span class="mi">10</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="k">delete</span> <span class="n">ptr</span><span class="p">;</span> <span class="c1">// 内存已归还，ptr 变成了“悬垂指针”
+</span></span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// ...
+</span></span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="o">*</span><span class="n">ptr</span> <span class="o">=</span> <span class="mi">20</span><span class="p">;</span> <span class="c1">// 错误！向已经不属于你的内存写入数据
+</span></span></span><span class="line"><span class="cl">               <span class="c1">// 此时这块内存可能已经被系统分配给其他变量使用了
+</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="二资源不只是内存文件句柄锁socket">二，“资源”不只是内存：文件句柄、锁、socket
+</h3><p><strong>核心含义：在编程中（尤其是 C++），你需要手动管理的不仅仅是“内存条里的空间”，还有操作系统提供的其他有限资源。如果这些资源用完不还，后果可能比内存泄漏更严重。</strong></p>
+<h4 id="1文件句柄">1，文件句柄
+</h4><ul>
+<li><strong>这是什么</strong>：当你用代码打开一个文件时，操作系统会给你一个“号牌”（句柄/描述符），代表你有权操作这个文件。</li>
+<li>**如果不释放 ：
+<ul>
+<li><strong>比喻</strong>：图书馆规定每个学生一次只能借 10 本书。你借了书看完不还，也不注销。虽然书架上还有书，但你的名额满了。</li>
+<li><strong>后果</strong>：<strong>“Too many open files”</strong>。操作系统对每个进程能打开的文件数量是有限制的（比如默认 1024 个）。一旦泄露了文件句柄，程序就再也打不开任何新文件了，导致功能瘫痪。</li>
+</ul>
+</li>
+</ul>
+<h4 id="2-锁-locks--mutexes">2， 锁 (Locks / Mutexes)
+</h4><ul>
+<li><strong>这是什么</strong>：在多线程编程中，为了防止数据打架，需要用“锁”来保护。线程 A 拿到锁，线程 B 就得在外面等，直到 A 释放锁。</li>
+<li><strong>如果不释放 (忘记 unlock)</strong>：
+<ul>
+<li><strong>比喻</strong>：公共厕所只有一个坑位，进去必须锁门。如果你上完厕所直接跳窗跑了，门还锁着。</li>
+<li><strong>后果</strong>：<strong>“死锁” (Deadlock)</strong>。后面排队的所有人（其他线程）都会以为里面还有人，永远在门口死等。程序虽然没崩溃，但会“<strong>卡死</strong>”不动了，这通常比崩溃更难处理。</li>
+</ul>
+</li>
+</ul>
+<h4 id="3socket-网络套接字">3，Socket (网络套接字)
+</h4><ul>
+<li><strong>这是什么</strong>：建立网络连接时（比如连接服务器或数据库），需要占用一个端口和相关的系统资源。</li>
+<li><strong>如果不释放 (忘记 close)</strong>：
+<ul>
+<li><strong>比喻</strong>：你是电话接线员，接通了一个电话后，聊完了不挂机，占着线路。</li>
+<li><strong>后果</strong>：<strong>“端口耗尽”</strong>。
+<ul>
+<li><strong>客户端</strong>：没法发起新的连接。</li>
+<li><strong>服务器</strong>：如果服务器处理完请求不关闭 Socket，很快就会把服务器的连接数占满，导致其他正常用户无法访问（类似遭受了 DoS 攻击）。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="三raii构造获取资源析构释放资源">三，RAII：构造获取资源、析构释放资源
+</h3><h4 id="1核心思想">1，核心思想
+</h4><p>它的思想是：<strong>把资源的生命周期绑定到一个对象的生命周期上</strong>。
+可以去查看所有的现代Cpp工程或是开源项目，稍微有点规模的，都是有这个思想，创建一个对象时，构造函数自动被调用，出生即持有资源，当对象生命结束，超过作用域，Cpp的语言机制会保证自动调用析构函数，在这里我们把资源释放掉，析构释放资源。</p>
+<h4 id="2为什么这样做">2,为什么这样做？
+</h4><p>想象一下上一节里的“锁”和“文件”。</p>
+<ul>
+<li>
+<p><strong>没有 RAII（手动挡）</strong>：<br>
+你就像是一个去住酒店的人。你要自己去前台办入住（open），离开时必须自己记得去退房（close）。如果你突然有急事（程序抛出异常）直接跑了，或者单纯忘了退房，房间就永久被占用了。</p>
+</li>
+<li>
+<p><strong>有了 RAII（自动挡 / 房卡模式）</strong>：<br>
+现在酒店升级了。</p>
+<ul>
+<li><strong>构造</strong>：你进房间插卡取电（对象创建，资源获取）。</li>
+<li><strong>析构</strong>：你拔卡离开房间，灯光自动熄灭，房门自动上锁（对象销毁，资源自动释放）。</li>
+<li><strong>重点</strong>：不管你是正常走出去，还是被人抬出去（异常），只要卡（对象）离开了房间（作用域），断电（释放）是物理上必然发生的，<strong>你根本不需要靠脑子去记“要关灯”这件事</strong>。</li>
+</ul>
+</li>
+</ul>
+<h4 id="3代码对比">3，代码对比
+</h4><p>过去模式：</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="line"><span class="cl"><span class="kt">void</span> <span class="nf">oldWay</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="n">mtx</span><span class="p">.</span><span class="n">lock</span><span class="p">();</span> <span class="c1">// 1. 手动上锁
+</span></span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// ... 执行任务 ...
+</span></span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="n">something_wrong</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="c1">// 哎呀！这里忘记写 unlock() 了！
+</span></span></span><span class="line"><span class="cl">        <span class="k">return</span><span class="p">;</span> <span class="c1">// 直接返回，导致死锁（Deadlock），别人再也进不来了
+</span></span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="n">mtx</span><span class="p">.</span><span class="n">unlock</span><span class="p">();</span> <span class="c1">// 2. 手动解锁（如果没执行到这里就完蛋了）
+</span></span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>现代模式：</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-C++" data-lang="C++"><span class="line"><span class="cl"><span class="kt">void</span> <span class="nf">raiiWay</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="n">std</span><span class="o">::</span><span class="n">mutex</span> <span class="n">mtx</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// 下面这行代码创建了一个对象 guard
+</span></span></span><span class="line"><span class="cl">    <span class="c1">// 构造时：自动帮你 mtx.lock()
+</span></span></span><span class="line"><span class="cl">    <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">guard</span><span class="p">(</span><span class="n">mtx</span><span class="p">);</span> 
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// ... 执行任务 ...
+</span></span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="n">something_wrong</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span><span class="p">;</span> 
+</span></span><span class="line"><span class="cl">        <span class="c1">// 重点来了！只要离开这个函数，guard 变量就会销毁。
+</span></span></span><span class="line"><span class="cl">        <span class="c1">// guard 的析构函数会自动帮你调用 mtx.unlock()。
+</span></span></span><span class="line"><span class="cl">        <span class="c1">// 哪怕抛出异常，资源也百分之百会释放。
+</span></span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span> <span class="c1">// 函数结束，guard 销毁，自动解锁
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="四raii构造获取资源析构释放资源">四，RAII：构造获取资源、析构释放资源
+</h3><h4 id="1独占型stdunique_ptr">1，独占型：std::unique_ptr
+</h4><ul>
+<li>“只能我拥有它，其它人没有权限拥有，但是可以转移所有权“</li>
+<li><strong>唯一性</strong>：同一时刻，只能有一个unique_ptr指向这块内存。</li>
+<li><strong>不能复制</strong>：不能写ptr2=ptr1,底层已经移除拷贝构造。</li>
+<li><strong>可以转移(move)</strong>:虽然不能复制，但是可以将控制权进行转移。
+什么时候用？</li>
+<li>这是默认首选，如果不知道用哪个，就先用这个，适用绝大多少场景，几乎没有额外开销</li>
+</ul>
+<h4 id="2共享型stdshared_ptr">2，共享型：std::shared_ptr
+</h4><ul>
+<li>“只要还有一个人在用，这块内存就不能删。”</li>
+<li><strong>引用计数（Reference Counting）</strong>：这是它的核心魔法。每多一个人（指针）指向这块内存，计数器就 +1；每少一个人（指针销毁或重置），计数器就 -1。</li>
+<li><strong>自动销毁</strong>：当计数器变成 <strong>0</strong> 时（也就是最后一个人也用完了），内存才会真正被释放。
+什么时候用？</li>
+<li>当一块资源需要在多个不同的地方被共同拥有时。比unqiue_ptr慢一点点，要维护一个计数器</li>
+</ul>
+<h4 id="4弱引用型">4,弱引用型
+</h4><ul>
+<li>“我只是静静地看着，不管它死活。”</li>
+<li>它是 shared_ptr 的小跟班。它指向 shared_ptr 管理的对象，但是<strong>不增加计数</strong>。</li>
+<li>如果你通过 weak_ptr 去看对象，如果对象还在，你就能用；如果对象已经销毁了（因为所有 shared_ptr 都没了），它会告诉你“对象不存在了”。</li>
+<li><strong>为什么要发明它？（解决 shared_ptr 的致命死穴）</strong>
+<ul>
+<li>
+<p><strong>循环引用（Circular Reference）</strong>：想象一下，对象 A 里有个 shared_ptr 指向 B，对象 B 里也有个 shared_ptr 指向 A。</p>
+</li>
+<li>
+<p><strong>后果</strong>：A 等 B 释放，B 等 A 释放。双方的计数器永远是 1，永远不会归零。这就是<strong>内存泄漏</strong>。</p>
+</li>
+<li>
+<p><strong>解法</strong>：把其中一方（比如 B 指向 A）改成 weak_ptr。打破闭环，A 就能正常销毁了。</p>
+</li>
+</ul>
+</li>
+</ul>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/c&#43;&#43;/">C&#43;&#43;</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+     
+    
+        
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2026 komorebi
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.33.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+    
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.c922af694cc257bf1ecc41c0dd7b0430f9114ec280ccf67cd2c6ad55f5316c4e.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>
